@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  type KeyboardEvent,
-  type ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowUp,
   Copy,
@@ -17,18 +10,43 @@ import {
   RefreshCcw,
   ThumbsDown,
   ThumbsUp,
-  X,
 } from "lucide-react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type Role = "user" | "assistant";
+type ThemeName = "dark" | "light";
+
+type ThemePalette = {
+  background: string;
+  textPrimary: string;
+  textSecondary: string;
+  sidebar: string;
+  sidebarCollapsed: string;
+  userBubble: string;
+  assistantBubble: string;
+  input: string;
+  divider: string;
+  iconMuted: string;
+  iconActive: string;
+  footer: string;
+};
 
 type Message = {
   id: string;
   role: Role;
   content: string;
   createdAt: number;
-  liked?: boolean;
-  disliked?: boolean;
+  liked: boolean;
+  disliked: boolean;
+  status: "thinking" | "done";
+  version: number;
 };
 
 type Chat = {
@@ -37,12 +55,44 @@ type Chat = {
   messages: Message[];
   createdAt: number;
   updatedAt: number;
-  isCustomTitle?: boolean;
+  isCustomTitle: boolean;
 };
 
-const STORAGE_KEY = "dadgpt-chats";
+const CHATS_STORAGE_KEY = "dadgpt-chats";
+const THEME_STORAGE_KEY = "dadgpt-theme";
 const ASSISTANT_REPLY = "ok 👍";
 const DEFAULT_CHAT_TITLE = "New chat";
+
+const THEME_PALETTES: Record<ThemeName, ThemePalette> = {
+  dark: {
+    background: "#343541",
+    textPrimary: "#f7f7f8",
+    textSecondary: "#aca8b6",
+    sidebar: "#202123",
+    sidebarCollapsed: "#202123",
+    userBubble: "#202123",
+    assistantBubble: "#444654",
+    input: "#40414f",
+    divider: "#2f2f35",
+    iconMuted: "rgba(247,247,248,0.6)",
+    iconActive: "#f7f7f8",
+    footer: "#8e8ea0",
+  },
+  light: {
+    background: "#ffffff",
+    textPrimary: "#0d0d0f",
+    textSecondary: "#6f6c7a",
+    sidebar: "#f9f9f9",
+    sidebarCollapsed: "#f0f0f0",
+    userBubble: "#ececec",
+    assistantBubble: "#f1f1f1",
+    input: "#ffffff",
+    divider: "#e4e4e7",
+    iconMuted: "rgba(13,13,15,0.55)",
+    iconActive: "#0d0d0f",
+    footer: "#6f6c7a",
+  },
+};
 
 const createId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -54,10 +104,12 @@ const createId = () => {
 const createAssistantMessage = (): Message => ({
   id: createId(),
   role: "assistant",
-  content: ASSISTANT_REPLY,
+  content: "",
   createdAt: Date.now(),
   liked: false,
   disliked: false,
+  status: "thinking",
+  version: 0,
 });
 
 const createChat = (): Chat => ({
@@ -72,21 +124,28 @@ const createChat = (): Chat => ({
 const buildTitleFromMessage = (content: string) => {
   const cleaned = content.trim();
   if (!cleaned) return DEFAULT_CHAT_TITLE;
-  const words = cleaned.split(/\s+/).slice(0, 3);
-  const isTruncated = cleaned.split(/\s+/).length > 3;
-  return isTruncated ? `${words.join(" ")}…` : words.join(" ");
+  const words = cleaned.split(/\s+/);
+  const firstThree = words.slice(0, 3).join(" ");
+  return words.length > 3 ? `${firstThree}…` : firstThree;
 };
 
 const loadChats = (): Chat[] => {
   if (typeof window === "undefined") return [createChat()];
   try {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
+    const saved = window.localStorage.getItem(CHATS_STORAGE_KEY);
     if (!saved) return [createChat()];
     const parsed = JSON.parse(saved) as Chat[];
     if (!Array.isArray(parsed) || parsed.length === 0) return [createChat()];
     return parsed.map((chat) => ({
       ...chat,
       isCustomTitle: chat.isCustomTitle ?? false,
+      messages: chat.messages.map((message) => ({
+        ...message,
+        liked: message.liked ?? false,
+        disliked: message.disliked ?? false,
+        status: message.status ?? "done",
+        version: message.version ?? 0,
+      })),
     }));
   } catch {
     return [createChat()];
@@ -95,54 +154,73 @@ const loadChats = (): Chat[] => {
 
 const persistChats = (chats: Chat[]) => {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
+  window.localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(chats));
 };
+
+const thinkingDelay = () => 2000 + Math.random() * 1000;
 
 export default function Home() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [hydrated, setHydrated] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isDesktop, setIsDesktop] = useState(false);
+  const [theme, setTheme] = useState<ThemeName>("dark");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
+  const pendingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
+    {},
+  );
 
   const currentChat = useMemo(
     () => chats.find((chat) => chat.id === activeChatId) ?? chats[0],
     [activeChatId, chats],
   );
 
+  const palette = THEME_PALETTES[theme];
+
   useEffect(() => {
-    const initialChats = loadChats();
-    setChats(initialChats);
-    setActiveChatId(initialChats[0]?.id ?? null);
+    const storedChats = loadChats();
+    setChats(storedChats);
+    setActiveChatId(storedChats[0]?.id ?? null);
     setHydrated(true);
   }, []);
 
   useEffect(() => {
-    const updateViewport = () => {
-      if (typeof window === "undefined") return;
-      setIsDesktop(window.innerWidth >= 1024);
-    };
-    updateViewport();
-    window.addEventListener("resize", updateViewport);
-    return () => window.removeEventListener("resize", updateViewport);
+    if (typeof window === "undefined") return;
+    const savedTheme = window.localStorage.getItem(
+      THEME_STORAGE_KEY,
+    ) as ThemeName | null;
+    if (savedTheme === "light" || savedTheme === "dark") {
+      setTheme(savedTheme);
+    }
   }, []);
 
   useEffect(() => {
-    setSidebarOpen(isDesktop);
-  }, [isDesktop]);
+    const handleResize = () => {
+      if (typeof window === "undefined") return;
+      setIsMobile(window.innerWidth < 768);
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   useEffect(() => {
-    if (hydrated) {
-      persistChats(chats);
-    }
+    if (!hydrated) return;
+    persistChats(chats);
   }, [chats, hydrated]);
+
+  useEffect(() => {
+    document.body.style.backgroundColor = palette.background;
+    document.body.style.color = palette.textPrimary;
+  }, [palette]);
 
   useEffect(() => {
     if (!currentChat) return;
@@ -150,13 +228,50 @@ export default function Home() {
   }, [currentChat?.messages.length]);
 
   useEffect(() => {
-    if (!textareaRef.current) return;
-    textareaRef.current.style.height = "auto";
-    textareaRef.current.style.height = `${Math.min(
-      textareaRef.current.scrollHeight,
-      240,
-    )}px`;
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const computed = window.getComputedStyle(textarea);
+    const lineHeight = parseFloat(computed.lineHeight) || 24;
+    const maxHeight = lineHeight * 6;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
   }, [input]);
+
+  useEffect(
+    () => () => {
+      Object.values(pendingTimers.current).forEach((timer) =>
+        clearTimeout(timer),
+      );
+    },
+    [],
+  );
+
+  const startAssistantResponse = (chatId: string, messageId: string) => {
+    const timer = setTimeout(() => {
+      setChats((prev) =>
+        prev.map((chat) => {
+          if (chat.id !== chatId) return chat;
+          return {
+            ...chat,
+            messages: chat.messages.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    content: ASSISTANT_REPLY,
+                    status: "done",
+                    version: message.version + 1,
+                  }
+                : message,
+            ),
+            updatedAt: Date.now(),
+          };
+        }),
+      );
+      delete pendingTimers.current[messageId];
+    }, thinkingDelay());
+
+    pendingTimers.current[messageId] = timer;
+  };
 
   const handleSubmit = () => {
     if (!currentChat || !input.trim()) return;
@@ -166,30 +281,34 @@ export default function Home() {
       role: "user",
       content: trimmed,
       createdAt: Date.now(),
+      liked: false,
+      disliked: false,
+      status: "done",
+      version: 0,
     };
-
     const assistantMessage = createAssistantMessage();
 
     setChats((prev) =>
       prev.map((chat) => {
         if (chat.id !== currentChat.id) return chat;
         const nextMessages = [...chat.messages, userMessage, assistantMessage];
-        let nextTitle = chat.title;
+        let title = chat.title;
         if (!chat.isCustomTitle) {
           const firstUser = nextMessages.find((msg) => msg.role === "user");
           if (firstUser) {
-            nextTitle = buildTitleFromMessage(firstUser.content);
+            title = buildTitleFromMessage(firstUser.content);
           }
         }
         return {
           ...chat,
-          title: nextTitle,
+          title,
           messages: nextMessages,
           updatedAt: Date.now(),
         };
       }),
     );
     setInput("");
+    startAssistantResponse(currentChat.id, assistantMessage.id);
   };
 
   const handleTextareaKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -204,23 +323,22 @@ export default function Home() {
     setChats((prev) => [newChat, ...prev]);
     setActiveChatId(newChat.id);
     setInput("");
-    if (!isDesktop) {
-      setSidebarOpen(false);
+    if (isMobile) {
+      setMobileSidebarOpen(false);
     }
   };
 
   const handleSelectChat = (chatId: string) => {
     setActiveChatId(chatId);
-    if (!isDesktop) {
-      setSidebarOpen(false);
+    if (isMobile) {
+      setMobileSidebarOpen(false);
     }
   };
 
-  const toggleSidebar = () => {
-    setSidebarOpen((prev) => !prev);
-  };
-
   const startRename = (chat: Chat) => {
+    if (sidebarCollapsed && !isMobile) {
+      setSidebarCollapsed(false);
+    }
     setEditingChatId(chat.id);
     setRenameValue(chat.title);
   };
@@ -244,41 +362,33 @@ export default function Home() {
     setRenameValue("");
   };
 
-  const handleCopy = async (messageId: string) => {
-    try {
-      await navigator.clipboard.writeText(ASSISTANT_REPLY);
-      setCopiedMessageId(messageId);
-      setTimeout(() => setCopiedMessageId(null), 1500);
-    } catch (error) {
-      console.error("Copy failed", error);
-    }
-  };
-
   const toggleReaction = (messageId: string, type: "like" | "dislike") => {
     if (!currentChat) return;
     setChats((prev) =>
       prev.map((chat) => {
         if (chat.id !== currentChat.id) return chat;
-        const updatedMessages = chat.messages.map((message) => {
-          if (message.id !== messageId || message.role !== "assistant") {
-            return message;
-          }
-          if (type === "like") {
-            const liked = !message.liked;
+        return {
+          ...chat,
+          messages: chat.messages.map((message) => {
+            if (message.id !== messageId || message.role !== "assistant") {
+              return message;
+            }
+            if (type === "like") {
+              const liked = !message.liked;
+              return {
+                ...message,
+                liked,
+                disliked: liked ? false : message.disliked,
+              };
+            }
+            const disliked = !message.disliked;
             return {
               ...message,
-              liked,
-              disliked: liked ? false : message.disliked,
+              disliked,
+              liked: disliked ? false : message.liked,
             };
-          }
-          const disliked = !message.disliked;
-          return {
-            ...message,
-            disliked,
-            liked: disliked ? false : message.liked,
-          };
-        });
-        return { ...chat, messages: updatedMessages };
+          }),
+        };
       }),
     );
   };
@@ -288,170 +398,301 @@ export default function Home() {
     setChats((prev) =>
       prev.map((chat) => {
         if (chat.id !== currentChat.id) return chat;
-        const index = chat.messages.findIndex(
-          (message) => message.id === messageId,
-        );
-        if (index === -1) return chat;
-        const duplicated = createAssistantMessage();
-        const updatedMessages = [...chat.messages];
-        updatedMessages.splice(index + 1, 0, duplicated);
-        return { ...chat, messages: updatedMessages, updatedAt: Date.now() };
+        return {
+          ...chat,
+          messages: chat.messages.map((message) =>
+            message.id === messageId
+              ? {
+                  ...message,
+                  content: "",
+                  status: "thinking",
+                  liked: false,
+                  disliked: false,
+                  version: message.version + 1,
+                }
+              : message,
+          ),
+        };
       }),
     );
+    startAssistantResponse(currentChat.id, messageId);
   };
 
-  const renderMessage = (message: Message) => {
-    const isAssistant = message.role === "assistant";
-    const backgroundClass = isAssistant ? "bg-surface-muted" : "bg-surface";
-    return (
-      <div
-        key={message.id}
-        className={`rounded-3xl border border-border ${backgroundClass} px-6 py-6 shadow-card`}
-      >
-        <div className="text-xs uppercase tracking-[0.2em] text-muted">
-          {isAssistant ? "DadGPT" : "You"}
-        </div>
-        <p className="mt-3 text-[15px] leading-relaxed text-white">
-          {message.content}
-        </p>
-        {isAssistant && (
-          <div className="mt-4 flex items-center gap-2 text-muted">
-            <IconButton
-              label="Copy"
-              onClick={() => handleCopy(message.id)}
-              active={copiedMessageId === message.id}
-            >
-              <Copy
-                size={16}
-                className="transition-colors"
-                strokeWidth={1.6}
-              />
-            </IconButton>
-            <IconButton
-              label="Like"
-              onClick={() => toggleReaction(message.id, "like")}
-              active={Boolean(message.liked)}
-            >
-              <ThumbsUp
-                size={16}
-                strokeWidth={1.6}
-                fill={message.liked ? "currentColor" : "none"}
-              />
-            </IconButton>
-            <IconButton
-              label="Dislike"
-              onClick={() => toggleReaction(message.id, "dislike")}
-              active={Boolean(message.disliked)}
-            >
-              <ThumbsDown
-                size={16}
-                strokeWidth={1.6}
-                fill={message.disliked ? "currentColor" : "none"}
-              />
-            </IconButton>
-            <IconButton
-              label="Regenerate"
-              onClick={() => handleRegenerate(message.id)}
-            >
-              <RefreshCcw size={16} strokeWidth={1.6} />
-            </IconButton>
-          </div>
-        )}
-      </div>
-    );
+  const toggleTheme = () => {
+    setTheme((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(THEME_STORAGE_KEY, next);
+      }
+      return next;
+    });
   };
+
+  const handleCopy = async (messageId: string) => {
+    try {
+      await navigator.clipboard.writeText(ASSISTANT_REPLY);
+      setCopiedMessageId(messageId);
+      setTimeout(() => setCopiedMessageId(null), 1500);
+    } catch {
+      // ignore copy errors
+    }
+  };
+
+  const assistiveTokens = ["ok", "👍"];
 
   return (
-    <div className="flex h-[100svh] min-h-screen bg-base text-white">
-      {(isDesktop ? sidebarOpen : true) && (
-        <Sidebar
-          chats={chats}
-          activeChatId={currentChat?.id ?? null}
-          isDesktop={isDesktop}
-          isOpen={sidebarOpen}
-          editingChatId={editingChatId}
-          renameValue={renameValue}
-          onSelectChat={handleSelectChat}
-          onNewChat={handleNewChat}
-          onToggleRename={startRename}
-          onRenameChange={setRenameValue}
-          onRenameConfirm={commitRename}
-          onRenameCancel={cancelRename}
-        />
-      )}
+    <div
+      className="flex h-[100svh] min-h-screen"
+      style={{ backgroundColor: palette.background, color: palette.textPrimary }}
+    >
+      <Sidebar
+        palette={palette}
+        chats={chats}
+        activeChatId={currentChat?.id ?? null}
+        collapsed={!isMobile && sidebarCollapsed}
+        isMobile={isMobile}
+        visible={isMobile ? mobileSidebarOpen : true}
+        editingChatId={editingChatId}
+        renameValue={renameValue}
+        onSelectChat={handleSelectChat}
+        onNewChat={handleNewChat}
+        onToggleRename={startRename}
+        onRenameChange={setRenameValue}
+        onRenameConfirm={commitRename}
+        onRenameCancel={cancelRename}
+        onCloseMobile={() => setMobileSidebarOpen(false)}
+        onToggleTheme={toggleTheme}
+      />
 
-      {!isDesktop && sidebarOpen && (
+      {isMobile && mobileSidebarOpen && (
         <button
+          type="button"
           aria-label="Close sidebar"
-          className="fixed inset-0 z-30 bg-black/60 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-30 bg-black/60"
+          onClick={() => setMobileSidebarOpen(false)}
         />
       )}
 
-      <div className="relative flex flex-1 flex-col bg-[#050509]">
-        <header className="relative flex h-16 items-center justify-center border-b border-border bg-surface text-white">
+      <div className="flex flex-1 flex-col">
+        <header
+          className="flex items-center justify-between border-b px-4 py-3 md:px-6"
+          style={{ borderColor: palette.divider }}
+        >
           <button
             type="button"
-            onClick={toggleSidebar}
-            className="absolute left-4 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface-muted text-white transition hover:border-white/30 hover:bg-surface-highlight"
+            aria-label="Toggle sidebar"
+            onClick={() => {
+              if (isMobile) {
+                setMobileSidebarOpen((prev) => !prev);
+              } else {
+                setSidebarCollapsed((prev) => !prev);
+              }
+            }}
+            className="flex h-10 w-10 items-center justify-center rounded-full transition hover:brightness-110"
+            style={{
+              backgroundColor: palette.sidebar,
+              color: palette.textPrimary,
+            }}
           >
-            {sidebarOpen && !isDesktop ? (
-              <X size={18} strokeWidth={1.5} />
-            ) : (
-              <Menu size={18} strokeWidth={1.5} />
-            )}
+            <Menu size={16} strokeWidth={1.5} />
           </button>
-          <span className="text-sm font-semibold tracking-[0.3em] text-white">
+          <span className="flex-1 text-center text-sm font-semibold tracking-[0.3em] uppercase">
             DadGPT
           </span>
+          <div className="w-10" />
         </header>
 
-        <div className="flex-1 overflow-y-auto">
-          <div className="mx-auto flex h-full w-full max-w-content flex-col gap-6 px-4 pb-32 pt-8 lg:px-8">
-            {currentChat && currentChat.messages.length > 0 ? (
-              currentChat.messages.map(renderMessage)
-            ) : (
-              <div className="flex flex-1 items-center justify-center">
-                <p className="text-2xl font-semibold text-white/85">
-                  What can I help with?
-                </p>
-              </div>
-            )}
+        <div className="flex-1 overflow-y-auto px-2 sm:px-4">
+          <div className="mx-auto flex h-full w-full max-w-3xl flex-col gap-2 pb-28 pt-6">
+            <AnimatePresence initial={false}>
+              {currentChat && currentChat.messages.length > 0 ? (
+                currentChat.messages.map((message) => {
+                  const isAssistant = message.role === "assistant";
+                  const bubbleBg = isAssistant
+                    ? palette.assistantBubble
+                    : palette.userBubble;
+                  const alignment = isAssistant
+                    ? "items-start"
+                    : "items-end";
+                  return (
+                    <motion.div
+                      key={message.id}
+                      layout
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      transition={{ duration: 0.2 }}
+                      className={`flex w-full ${alignment}`}
+                    >
+                      <div
+                        className={`max-w-xl rounded-2xl px-4 py-3 text-[15px] leading-6 shadow-sm ${
+                          isAssistant ? "rounded-tl-none" : "rounded-tr-none"
+                        }`}
+                        style={{
+                          backgroundColor: bubbleBg,
+                          color: palette.textPrimary,
+                        }}
+                      >
+                        <AnimatePresence mode="wait">
+                          {message.status === "thinking" ? (
+                            <motion.div
+                              key={`thinking-${message.id}-${message.version}`}
+                              initial={{ opacity: 0.4, scale: 0.98 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.97 }}
+                              transition={{ duration: 0.2 }}
+                              className="flex items-center gap-1"
+                            >
+                              <ThinkingDots color={palette.textSecondary} />
+                            </motion.div>
+                          ) : (
+                            <motion.div
+                              key={`content-${message.id}-${message.version}`}
+                              initial={{ opacity: 0, scale: 0.95 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.95 }}
+                              transition={{ duration: 0.25 }}
+                              className="flex items-center gap-1"
+                            >
+                              {message.role === "assistant"
+                                ? assistiveTokens.map((token, index) => (
+                                    <motion.span
+                                      key={`${message.id}-${token}-${index}`}
+                                      initial={{ opacity: 0, scale: 0.95 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      transition={{
+                                        delay: index * 0.2,
+                                        duration: 0.2,
+                                      }}
+                                    >
+                                      {token}
+                                    </motion.span>
+                                  ))
+                                : message.content}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+
+                        {message.role === "assistant" && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <IconButton
+                              palette={palette}
+                              label="Copy"
+                              disabled={message.status !== "done"}
+                              active={copiedMessageId === message.id}
+                              onClick={() => handleCopy(message.id)}
+                            >
+                              <Copy size={16} strokeWidth={1.6} />
+                            </IconButton>
+                            <IconButton
+                              palette={palette}
+                              label="Like"
+                              disabled={message.status !== "done"}
+                              active={message.liked}
+                              onClick={() => toggleReaction(message.id, "like")}
+                            >
+                              <ThumbsUp
+                                size={16}
+                                strokeWidth={1.6}
+                                fill={message.liked ? palette.iconActive : "none"}
+                              />
+                            </IconButton>
+                            <IconButton
+                              palette={palette}
+                              label="Dislike"
+                              disabled={message.status !== "done"}
+                              active={message.disliked}
+                              onClick={() =>
+                                toggleReaction(message.id, "dislike")
+                              }
+                            >
+                              <ThumbsDown
+                                size={16}
+                                strokeWidth={1.6}
+                                fill={
+                                  message.disliked ? palette.iconActive : "none"
+                                }
+                              />
+                            </IconButton>
+                            <IconButton
+                              palette={palette}
+                              label="Regenerate"
+                              disabled={message.status !== "done"}
+                              onClick={() => handleRegenerate(message.id)}
+                            >
+                              <RefreshCcw size={16} strokeWidth={1.6} />
+                            </IconButton>
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })
+              ) : (
+                <motion.div
+                  key="empty-state"
+                  className="flex flex-1 items-center justify-center"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                >
+                  <p
+                    className="text-2xl font-medium"
+                    style={{ color: "#aca8b6" }}
+                  >
+                    What can I help with?
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
             <div ref={scrollAnchorRef} />
           </div>
         </div>
 
-        <div className="border-t border-border bg-gradient-to-t from-[#050509] via-[#050509] to-transparent px-4 pb-8 pt-4">
+        <div
+          className="w-full px-3 pb-6 pt-4 sm:px-6"
+          style={{ borderTop: `1px solid ${palette.divider}` }}
+        >
           <form
-            className="mx-auto w-full max-w-content space-y-3"
+            className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-xl px-4 py-3"
+            style={{
+              backgroundColor: palette.input,
+              color: palette.textPrimary,
+            }}
             onSubmit={(event) => {
               event.preventDefault();
               handleSubmit();
             }}
           >
-            <div className="flex rounded-3xl border border-border-strong bg-surface-muted/90 px-4 py-3 shadow-input focus-within:border-white/30 focus-within:shadow-[0_0_0_1px_rgba(255,255,255,0.25)]">
-              <textarea
-                ref={textareaRef}
-                className="max-h-60 flex-1 resize-none bg-transparent text-[15px] leading-relaxed text-white placeholder:text-muted focus:outline-none"
-                placeholder="Ask anything"
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={handleTextareaKeyDown}
-                rows={1}
-              />
-              <button
-                type="submit"
-                disabled={!input.trim()}
-                className="ml-3 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-white/30"
-                aria-label="Send message"
-              >
-                <ArrowUp size={18} strokeWidth={1.6} />
-              </button>
-            </div>
-            <p className="text-center text-[11px] leading-tight text-muted">
-              Press Enter to send • Shift + Enter for a newline
-            </p>
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              placeholder="Ask anything"
+              className="max-h-60 flex-1 resize-none bg-transparent text-base leading-6 placeholder-opacity-70 focus:outline-none"
+              style={{
+                color: palette.textPrimary,
+              }}
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={handleTextareaKeyDown}
+            />
+            <button
+              type="submit"
+              disabled={!input.trim()}
+              className="flex h-9 w-9 items-center justify-center rounded-full transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              style={{
+                backgroundColor: palette.sidebar,
+                color: palette.textPrimary,
+              }}
+            >
+              <ArrowUp size={16} strokeWidth={1.6} />
+            </button>
           </form>
+          <p
+            className="mt-3 text-center text-xs"
+            style={{ color: palette.footer }}
+          >
+            DadGPT can make mistakes.
+          </p>
         </div>
       </div>
     </div>
@@ -459,10 +700,12 @@ export default function Home() {
 }
 
 type SidebarProps = {
+  palette: ThemePalette;
   chats: Chat[];
   activeChatId: string | null;
-  isDesktop: boolean;
-  isOpen: boolean;
+  collapsed: boolean;
+  isMobile: boolean;
+  visible: boolean;
   editingChatId: string | null;
   renameValue: string;
   onSelectChat: (id: string) => void;
@@ -471,13 +714,17 @@ type SidebarProps = {
   onRenameChange: (value: string) => void;
   onRenameConfirm: (chatId: string) => void;
   onRenameCancel: () => void;
+  onCloseMobile: () => void;
+  onToggleTheme: () => void;
 };
 
 const Sidebar = ({
+  palette,
   chats,
   activeChatId,
-  isDesktop,
-  isOpen,
+  collapsed,
+  isMobile,
+  visible,
   editingChatId,
   renameValue,
   onSelectChat,
@@ -486,43 +733,57 @@ const Sidebar = ({
   onRenameChange,
   onRenameConfirm,
   onRenameCancel,
+  onCloseMobile,
+  onToggleTheme,
 }: SidebarProps) => {
-  const positionClasses = isDesktop
-    ? "relative border-r border-border"
-    : "fixed inset-y-0 left-0 z-40 border-r border-border shadow-2xl";
-  const translateClasses =
-    isDesktop || isOpen ? "translate-x-0" : "-translate-x-full";
+  const widthClass = collapsed ? "w-[60px]" : "w-[260px]";
+  const baseClasses = isMobile
+    ? `fixed inset-y-0 left-0 z-40 transform transition-transform duration-300 ${
+        visible ? "translate-x-0" : "-translate-x-full"
+      }`
+    : "relative";
 
-  const sidebarContent = (
-    <div className="flex h-full flex-col bg-surface px-3 py-4 text-white">
-      <div className="mb-4 flex items-center justify-between px-2">
-        <p className="text-sm font-semibold tracking-wide text-white/80">
-          Chats
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={onNewChat}
-        className="mb-3 flex items-center justify-center gap-2 rounded-2xl border border-border bg-surface-muted px-4 py-3 text-sm font-medium text-white transition hover:border-white/30 hover:bg-surface-highlight"
-      >
-        <Plus size={16} strokeWidth={1.6} />
-        New chat
-      </button>
-      <div className="flex-1 overflow-y-auto pr-1">
-        {chats.map((chat) => {
-          const isActive = chat.id === activeChatId;
-          const isEditing = chat.id === editingChatId;
-          return (
-            <div
-              key={chat.id}
-              className={`group relative mb-2 rounded-2xl border ${
-                isActive
-                  ? "border-white/30 bg-surface-highlight"
-                  : "border-transparent hover:bg-surface-muted"
-              }`}
-            >
-              {isEditing ? (
-                <div className="px-4 py-3">
+  return (
+    <aside
+      className={`${baseClasses} ${widthClass} flex-shrink-0 border-r`}
+      style={{
+        borderColor: palette.divider,
+        backgroundColor: collapsed ? palette.sidebarCollapsed : palette.sidebar,
+        color: palette.textPrimary,
+      }}
+    >
+      <div className="flex h-full flex-col px-3 py-4">
+        {!collapsed && (
+          <div className="mb-3 px-2 text-sm font-semibold tracking-wide">
+            Chats
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onNewChat}
+          className={`mb-3 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition hover:brightness-110 ${
+            collapsed ? "rounded-full" : ""
+          }`}
+          style={{ backgroundColor: palette.input }}
+        >
+          <Plus size={16} strokeWidth={1.6} />
+          {!collapsed && <span>New chat</span>}
+        </button>
+        <div className="flex-1 space-y-2 overflow-y-auto pr-1">
+          {chats.map((chat) => {
+            const isActive = chat.id === activeChatId;
+            const isEditing = chat.id === editingChatId;
+            return (
+              <div
+                key={chat.id}
+                className={`group rounded-lg transition hover:brightness-110 ${
+                  isActive ? "brightness-110" : ""
+                }`}
+                style={{
+                  backgroundColor: isActive ? palette.userBubble : "transparent",
+                }}
+              >
+                {isEditing && !collapsed ? (
                   <input
                     autoFocus
                     value={renameValue}
@@ -537,80 +798,106 @@ const Sidebar = ({
                         onRenameCancel();
                       }
                     }}
-                    className="w-full bg-transparent text-sm text-white focus:outline-none"
+                    className="w-full rounded-md bg-transparent px-3 py-2 text-sm focus:outline-none"
+                    style={{ color: palette.textPrimary }}
                   />
-                </div>
-              ) : (
-                <>
+                ) : (
                   <button
                     type="button"
                     onClick={() => onSelectChat(chat.id)}
-                    className="block w-full px-4 py-3 text-left text-sm text-white/80"
+                    className="relative flex w-full items-center justify-between px-3 py-2 text-left text-sm"
                   >
-                    <span className="block truncate pr-6">{chat.title}</span>
+                    <span
+                      className={`truncate ${collapsed ? "hidden" : "pr-6"}`}
+                      title={chat.title}
+                    >
+                      {chat.title}
+                    </span>
+                    {!collapsed && (
+                      <button
+                        type="button"
+                        aria-label="Rename chat"
+                        className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full p-1 opacity-60 transition group-hover:flex group-hover:opacity-100"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onToggleRename(chat);
+                        }}
+                      >
+                        <Pencil size={14} strokeWidth={1.4} />
+                      </button>
+                    )}
                   </button>
-                  <button
-                    type="button"
-                    className="absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-full p-1 text-muted transition hover:text-white group-hover:flex"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onToggleRename(chat);
-                    }}
-                    aria-label="Rename chat"
-                  >
-                    <Pencil size={14} strokeWidth={1.6} />
-                  </button>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <div className="mt-4 rounded-2xl border border-border bg-surface-muted p-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-blue text-base font-semibold text-white">
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            onToggleTheme();
+            if (isMobile) onCloseMobile();
+          }}
+          className="mt-3 flex items-center gap-2 rounded-lg px-3 py-2 transition hover:brightness-110"
+          style={{ backgroundColor: palette.input }}
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#3a8bff] text-base font-semibold text-white">
             A
           </div>
-          <div>
-            <p className="text-sm font-semibold text-white">Child</p>
-            <span className="mt-1 inline-flex items-center rounded-full bg-badge-gray px-2 py-0.5 text-[11px] font-medium text-muted">
-              Free
-            </span>
-          </div>
-        </div>
+          {!collapsed && (
+            <div>
+              <p className="text-sm font-semibold">Child</p>
+              <span className="text-xs text-white/60">Free</span>
+            </div>
+          )}
+        </button>
       </div>
-    </div>
-  );
-
-  return (
-    <>
-      <aside
-        className={`${positionClasses} w-72 transform bg-surface transition-transform duration-300 ${translateClasses}`}
-      >
-        {sidebarContent}
-      </aside>
-    </>
+    </aside>
   );
 };
 
 type IconButtonProps = {
+  palette: ThemePalette;
   label: string;
-  onClick: () => void;
   children: ReactNode;
+  onClick: () => void;
   active?: boolean;
+  disabled?: boolean;
 };
 
-const IconButton = ({ label, onClick, children, active }: IconButtonProps) => (
+const IconButton = ({
+  palette,
+  label,
+  children,
+  onClick,
+  active,
+  disabled,
+}: IconButtonProps) => (
   <button
     type="button"
     aria-label={label}
+    disabled={disabled}
     onClick={onClick}
-    className={`flex h-8 w-8 items-center justify-center rounded-full border text-xs transition ${
-      active
-        ? "border-white/40 bg-white/15 text-white"
-        : "border-transparent text-muted hover:border-white/20 hover:bg-white/5 hover:text-white"
+    className={`rounded-full p-1 transition ${
+      disabled ? "cursor-not-allowed opacity-40" : "opacity-60 hover:opacity-100"
     }`}
+    style={{
+      color: active ? palette.iconActive : palette.iconMuted,
+    }}
   >
     {children}
   </button>
 );
+
+const ThinkingDots = ({ color }: { color: string }) => (
+  <div className="flex items-center gap-1" style={{ color }}>
+    {[0, 1, 2].map((index) => (
+      <span
+        key={`dot-${index}`}
+        className="thinking-dot"
+        style={{ animationDelay: `${index * 0.15}s`, backgroundColor: color }}
+      />
+    ))}
+  </div>
+);
+
