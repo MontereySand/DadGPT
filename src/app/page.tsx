@@ -29,9 +29,12 @@ type ThemePalette = {
   textSecondary: string;
   sidebar: string;
   sidebarCollapsed: string;
+  sidebarHover: string;
   userBubble: string;
   assistantBubble: string;
   input: string;
+  inputFocus: string;
+  inputBorder: string;
   divider: string;
   iconMuted: string;
   iconActive: string;
@@ -62,21 +65,23 @@ const CHATS_STORAGE_KEY = "dadgpt-chats";
 const THEME_STORAGE_KEY = "dadgpt-theme";
 const ASSISTANT_REPLY = "ok 👍";
 const DEFAULT_CHAT_TITLE = "New chat";
-
 const THEME_PALETTES: Record<ThemeName, ThemePalette> = {
   dark: {
     background: "#343541",
-    textPrimary: "#f7f7f8",
+    textPrimary: "#ececf1",
     textSecondary: "#aca8b6",
     sidebar: "#202123",
     sidebarCollapsed: "#202123",
+    sidebarHover: "#343541",
     userBubble: "#202123",
     assistantBubble: "#444654",
-    input: "#40414f",
-    divider: "#2f2f35",
-    iconMuted: "rgba(247,247,248,0.6)",
-    iconActive: "#f7f7f8",
-    footer: "#8e8ea0",
+    input: "#343541",
+    inputFocus: "#40414f",
+    inputBorder: "#565869",
+    divider: "#565869",
+    iconMuted: "#d9d9e3",
+    iconActive: "#ececf1",
+    footer: "#aca8b6",
   },
   light: {
     background: "#ffffff",
@@ -84,11 +89,14 @@ const THEME_PALETTES: Record<ThemeName, ThemePalette> = {
     textSecondary: "#6f6c7a",
     sidebar: "#f9f9f9",
     sidebarCollapsed: "#f0f0f0",
+    sidebarHover: "#ececec",
     userBubble: "#ececec",
     assistantBubble: "#f1f1f1",
     input: "#ffffff",
+    inputFocus: "#f5f5f5",
+    inputBorder: "#d4d4d8",
     divider: "#e4e4e7",
-    iconMuted: "rgba(13,13,15,0.55)",
+    iconMuted: "#6f6c7a",
     iconActive: "#0d0d0f",
     footer: "#6f6c7a",
   },
@@ -159,10 +167,14 @@ const persistChats = (chats: Chat[]) => {
 
 const thinkingDelay = () => 2000 + Math.random() * 1000;
 
+const splitTokens = (content: string) =>
+  content.trim().split(/\s+/).filter(Boolean);
+
 export default function Home() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [inputFocused, setInputFocused] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [theme, setTheme] = useState<ThemeName>("dark");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -174,9 +186,7 @@ export default function Home() {
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
-  const pendingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
-    {},
-  );
+  const timersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const currentChat = useMemo(
     () => chats.find((chat) => chat.id === activeChatId) ?? chats[0],
@@ -239,9 +249,7 @@ export default function Home() {
 
   useEffect(
     () => () => {
-      Object.values(pendingTimers.current).forEach((timer) =>
-        clearTimeout(timer),
-      );
+      Object.values(timersRef.current).forEach((timer) => clearTimeout(timer));
     },
     [],
   );
@@ -267,10 +275,10 @@ export default function Home() {
           };
         }),
       );
-      delete pendingTimers.current[messageId];
+      delete timersRef.current[messageId];
     }, thinkingDelay());
 
-    pendingTimers.current[messageId] = timer;
+    timersRef.current[messageId] = timer;
   };
 
   const handleSubmit = () => {
@@ -434,11 +442,9 @@ export default function Home() {
       setCopiedMessageId(messageId);
       setTimeout(() => setCopiedMessageId(null), 1500);
     } catch {
-      // ignore copy errors
+      // ignore
     }
   };
-
-  const assistiveTokens = ["ok", "👍"];
 
   return (
     <div
@@ -502,8 +508,8 @@ export default function Home() {
           <div className="w-10" />
         </header>
 
-        <div className="flex-1 overflow-y-auto px-2 sm:px-4">
-          <div className="mx-auto flex h-full w-full max-w-3xl flex-col gap-2 pb-28 pt-6">
+        <div className="flex-1 overflow-y-auto px-3 sm:px-6">
+          <div className="mx-auto flex h-full w-full max-w-3xl flex-col gap-6 py-6 pb-32">
             <AnimatePresence initial={false}>
               {currentChat && currentChat.messages.length > 0 ? (
                 currentChat.messages.map((message) => {
@@ -511,119 +517,126 @@ export default function Home() {
                   const bubbleBg = isAssistant
                     ? palette.assistantBubble
                     : palette.userBubble;
-                  const alignment = isAssistant
-                    ? "items-start"
-                    : "items-end";
                   return (
                     <motion.div
-                      key={message.id}
+                      key={`${message.id}-${message.version}`}
                       layout
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -8 }}
                       transition={{ duration: 0.2 }}
-                      className={`flex w-full ${alignment}`}
+                      className={`flex w-full ${
+                        isAssistant ? "justify-start" : "justify-end"
+                      }`}
                     >
                       <div
-                        className={`max-w-xl rounded-2xl px-4 py-3 text-[15px] leading-6 shadow-sm ${
-                          isAssistant ? "rounded-tl-none" : "rounded-tr-none"
+                        className={`max-w-2xl px-4 py-3 text-[15px] leading-6 shadow-sm ${
+                          isAssistant
+                            ? "rounded-2xl rounded-tl-none"
+                            : "rounded-2xl rounded-tr-none"
                         }`}
                         style={{
                           backgroundColor: bubbleBg,
-                          color: palette.textPrimary,
+                          color: "#ececf1",
                         }}
                       >
-                        <AnimatePresence mode="wait">
+                        <AnimatePresence mode="wait" initial={false}>
                           {message.status === "thinking" ? (
                             <motion.div
                               key={`thinking-${message.id}-${message.version}`}
                               initial={{ opacity: 0.4, scale: 0.98 }}
                               animate={{ opacity: 1, scale: 1 }}
-                              exit={{ opacity: 0, scale: 0.97 }}
+                              exit={{ opacity: 0, scale: 0.95 }}
                               transition={{ duration: 0.2 }}
-                              className="flex items-center gap-1"
                             >
                               <ThinkingDots color={palette.textSecondary} />
                             </motion.div>
-                          ) : (
+                          ) : isAssistant ? (
                             <motion.div
                               key={`content-${message.id}-${message.version}`}
-                              initial={{ opacity: 0, scale: 0.95 }}
-                              animate={{ opacity: 1, scale: 1 }}
-                              exit={{ opacity: 0, scale: 0.95 }}
+                              className="flex flex-wrap items-center gap-[6px]"
+                              initial={{ opacity: 0, y: 5 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -4 }}
                               transition={{ duration: 0.25 }}
-                              className="flex items-center gap-1"
                             >
-                              {message.role === "assistant"
-                                ? assistiveTokens.map((token, index) => (
-                                    <motion.span
-                                      key={`${message.id}-${token}-${index}`}
-                                      initial={{ opacity: 0, scale: 0.95 }}
-                                      animate={{ opacity: 1, scale: 1 }}
-                                      transition={{
-                                        delay: index * 0.2,
-                                        duration: 0.2,
-                                      }}
-                                    >
-                                      {token}
-                                    </motion.span>
-                                  ))
-                                : message.content}
+                              {splitTokens(message.content || ASSISTANT_REPLY).map(
+                                (token, tokenIndex, arr) => (
+                                  <motion.span
+                                    key={`${message.id}-${token}-${tokenIndex}`}
+                                    className={
+                                      token.includes("👍") ? "text-[18px]" : undefined
+                                    }
+                                    initial={{ opacity: 0, y: 5 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{
+                                      delay: tokenIndex * 0.15,
+                                      duration: 0.2,
+                                    }}
+                                  >
+                                    {token}
+                                    {tokenIndex < arr.length - 1 ? "\u00A0" : ""}
+                                  </motion.span>
+                                ),
+                              )}
                             </motion.div>
+                          ) : (
+                            <motion.p
+                              key={`user-${message.id}-${message.version}`}
+                              initial={{ opacity: 0, y: 5 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -4 }}
+                              transition={{ duration: 0.2 }}
+                            >
+                              {message.content}
+                            </motion.p>
                           )}
                         </AnimatePresence>
 
-                        {message.role === "assistant" && (
-                          <div className="mt-2 flex items-center gap-2">
-                            <IconButton
-                              palette={palette}
-                              label="Copy"
-                              disabled={message.status !== "done"}
-                              active={copiedMessageId === message.id}
-                              onClick={() => handleCopy(message.id)}
-                            >
-                              <Copy size={16} strokeWidth={1.6} />
-                            </IconButton>
-                            <IconButton
-                              palette={palette}
-                              label="Like"
-                              disabled={message.status !== "done"}
-                              active={message.liked}
-                              onClick={() => toggleReaction(message.id, "like")}
-                            >
-                              <ThumbsUp
-                                size={16}
-                                strokeWidth={1.6}
-                                fill={message.liked ? palette.iconActive : "none"}
-                              />
-                            </IconButton>
-                            <IconButton
-                              palette={palette}
-                              label="Dislike"
-                              disabled={message.status !== "done"}
-                              active={message.disliked}
-                              onClick={() =>
-                                toggleReaction(message.id, "dislike")
-                              }
-                            >
-                              <ThumbsDown
-                                size={16}
-                                strokeWidth={1.6}
-                                fill={
-                                  message.disliked ? palette.iconActive : "none"
-                                }
-                              />
-                            </IconButton>
-                            <IconButton
-                              palette={palette}
-                              label="Regenerate"
-                              disabled={message.status !== "done"}
-                              onClick={() => handleRegenerate(message.id)}
-                            >
-                              <RefreshCcw size={16} strokeWidth={1.6} />
-                            </IconButton>
-                          </div>
-                        )}
+                        {message.role === "assistant" &&
+                          message.status === "done" && (
+                            <div className="mt-3 flex items-center gap-6">
+                              <IconButton
+                                palette={palette}
+                                label="Copy"
+                                active={copiedMessageId === message.id}
+                                onClick={() => handleCopy(message.id)}
+                              >
+                                <Copy size={16} strokeWidth={0} fill="currentColor" />
+                              </IconButton>
+                              <IconButton
+                                palette={palette}
+                                label="Like"
+                                active={message.liked}
+                                onClick={() => toggleReaction(message.id, "like")}
+                              >
+                                <ThumbsUp size={16} strokeWidth={0} fill="currentColor" />
+                              </IconButton>
+                              <IconButton
+                                palette={palette}
+                                label="Dislike"
+                                active={message.disliked}
+                                onClick={() => toggleReaction(message.id, "dislike")}
+                              >
+                                <ThumbsDown
+                                  size={16}
+                                  strokeWidth={0}
+                                  fill="currentColor"
+                                />
+                              </IconButton>
+                              <IconButton
+                                palette={palette}
+                                label="Regenerate"
+                                onClick={() => handleRegenerate(message.id)}
+                              >
+                                <RefreshCcw
+                                  size={16}
+                                  strokeWidth={0}
+                                  fill="currentColor"
+                                />
+                              </IconButton>
+                            </div>
+                          )}
                       </div>
                     </motion.div>
                   );
@@ -635,10 +648,7 @@ export default function Home() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                 >
-                  <p
-                    className="text-2xl font-medium"
-                    style={{ color: "#aca8b6" }}
-                  >
+                  <p className="text-[20px]" style={{ color: "#aca8b6" }}>
                     What can I help with?
                   </p>
                 </motion.div>
@@ -649,14 +659,14 @@ export default function Home() {
         </div>
 
         <div
-          className="w-full px-3 pb-6 pt-4 sm:px-6"
-          style={{ borderTop: `1px solid ${palette.divider}` }}
+          className="w-full border-t px-3 pb-6 pt-4 sm:px-6"
+          style={{ borderColor: palette.divider }}
         >
           <form
-            className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-xl px-4 py-3"
+            className="mx-auto flex w-full max-w-3xl items-end gap-3 rounded-xl border px-4"
             style={{
-              backgroundColor: palette.input,
-              color: palette.textPrimary,
+              backgroundColor: inputFocused ? palette.inputFocus : palette.input,
+              borderColor: palette.inputBorder,
             }}
             onSubmit={(event) => {
               event.preventDefault();
@@ -667,31 +677,32 @@ export default function Home() {
               ref={textareaRef}
               rows={1}
               placeholder="Ask anything"
-              className="max-h-60 flex-1 resize-none bg-transparent text-base leading-6 placeholder-opacity-70 focus:outline-none"
-              style={{
-                color: palette.textPrimary,
-              }}
+              className="max-h-60 flex-1 resize-none bg-transparent px-0 py-3 text-base leading-6 placeholder-[#8e8e9e] focus:outline-none"
+              style={{ color: palette.textPrimary }}
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleTextareaKeyDown}
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => setInputFocused(false)}
             />
             <button
               type="submit"
+              aria-label="Send message"
               disabled={!input.trim()}
-              className="flex h-9 w-9 items-center justify-center rounded-full transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              className="mb-2 flex h-9 w-9 items-center justify-center rounded-full transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               style={{
-                backgroundColor: palette.sidebar,
+                backgroundColor: palette.inputFocus,
                 color: palette.textPrimary,
               }}
             >
-              <ArrowUp size={16} strokeWidth={1.6} />
+              <ArrowUp size={16} strokeWidth={1.5} />
             </button>
           </form>
           <p
             className="mt-3 text-center text-xs"
             style={{ color: palette.footer }}
           >
-            DadGPT can make mistakes.
+            DadGPT can make mistakes. Check important info.
           </p>
         </div>
       </div>
@@ -736,7 +747,7 @@ const Sidebar = ({
   onCloseMobile,
   onToggleTheme,
 }: SidebarProps) => {
-  const widthClass = collapsed ? "w-[60px]" : "w-[260px]";
+  const width = collapsed ? 60 : 260;
   const baseClasses = isMobile
     ? `fixed inset-y-0 left-0 z-40 transform transition-transform duration-300 ${
         visible ? "translate-x-0" : "-translate-x-full"
@@ -745,26 +756,26 @@ const Sidebar = ({
 
   return (
     <aside
-      className={`${baseClasses} ${widthClass} flex-shrink-0 border-r`}
+      className={`${baseClasses} flex-shrink-0 border-r`}
       style={{
+        width,
+        transition: "width 0.3s ease",
         borderColor: palette.divider,
         backgroundColor: collapsed ? palette.sidebarCollapsed : palette.sidebar,
         color: palette.textPrimary,
       }}
     >
-      <div className="flex h-full flex-col px-3 py-4">
+      <div className="flex h-full flex-col px-4 py-4">
         {!collapsed && (
-          <div className="mb-3 px-2 text-sm font-semibold tracking-wide">
-            Chats
-          </div>
+          <p className="mb-4 text-sm font-semibold tracking-wide">Chats</p>
         )}
         <button
           type="button"
           onClick={onNewChat}
-          className={`mb-3 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition hover:brightness-110 ${
+          className={`mb-4 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition hover:bg-[#343541] ${
             collapsed ? "rounded-full" : ""
           }`}
-          style={{ backgroundColor: palette.input }}
+          style={{ backgroundColor: "#2f2f35", color: palette.textPrimary }}
         >
           <Plus size={16} strokeWidth={1.6} />
           {!collapsed && <span>New chat</span>}
@@ -776,11 +787,11 @@ const Sidebar = ({
             return (
               <div
                 key={chat.id}
-                className={`group rounded-lg transition hover:brightness-110 ${
-                  isActive ? "brightness-110" : ""
-                }`}
+                className="group rounded-lg transition-colors"
                 style={{
-                  backgroundColor: isActive ? palette.userBubble : "transparent",
+                  backgroundColor: isActive
+                    ? palette.sidebarHover
+                    : "transparent",
                 }}
               >
                 {isEditing && !collapsed ? (
@@ -805,26 +816,43 @@ const Sidebar = ({
                   <button
                     type="button"
                     onClick={() => onSelectChat(chat.id)}
-                    className="relative flex w-full items-center justify-between px-3 py-2 text-left text-sm"
+                    className="relative flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:brightness-110"
+                    style={{
+                      color: palette.textPrimary,
+                      backgroundColor: isActive
+                        ? palette.sidebarHover
+                        : "transparent",
+                    }}
                   >
-                    <span
-                      className={`truncate ${collapsed ? "hidden" : "pr-6"}`}
-                      title={chat.title}
-                    >
-                      {chat.title}
-                    </span>
-                    {!collapsed && (
-                      <button
-                        type="button"
-                        aria-label="Rename chat"
-                        className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full p-1 opacity-60 transition group-hover:flex group-hover:opacity-100"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onToggleRename(chat);
-                        }}
-                      >
-                        <Pencil size={14} strokeWidth={1.4} />
-                      </button>
+                    {collapsed ? (
+                      <span className="text-sm font-medium">
+                        {(chat.title || DEFAULT_CHAT_TITLE).slice(0, 1).toUpperCase()}
+                      </span>
+                    ) : (
+                      <>
+                        <span className="truncate pr-6" title={chat.title}>
+                          {chat.title}
+                        </span>
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          aria-label="Rename chat"
+                          className="absolute right-3 hidden rounded-full p-1 opacity-60 transition hover:opacity-100 group-hover:flex"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onToggleRename(chat);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              onToggleRename(chat);
+                            }
+                          }}
+                        >
+                          <Pencil size={14} strokeWidth={1.4} />
+                        </span>
+                      </>
                     )}
                   </button>
                 )}
@@ -838,16 +866,18 @@ const Sidebar = ({
             onToggleTheme();
             if (isMobile) onCloseMobile();
           }}
-          className="mt-3 flex items-center gap-2 rounded-lg px-3 py-2 transition hover:brightness-110"
-          style={{ backgroundColor: palette.input }}
+          className="mt-4 flex items-center gap-3 rounded-lg px-3 py-3 transition hover:bg-[#343541]"
+          style={{ backgroundColor: "#2f2f35", color: palette.textPrimary }}
         >
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#3a8bff] text-base font-semibold text-white">
             A
           </div>
           {!collapsed && (
-            <div>
+            <div className="space-y-1">
               <p className="text-sm font-semibold">Child</p>
-              <span className="text-xs text-white/60">Free</span>
+              <span className="inline-flex items-center rounded-full bg-[#3b3c45] px-2 py-[2px] text-[11px] text-[#d9d9e3]">
+                Free
+              </span>
             </div>
           )}
         </button>
@@ -859,30 +889,20 @@ const Sidebar = ({
 type IconButtonProps = {
   palette: ThemePalette;
   label: string;
-  children: ReactNode;
   onClick: () => void;
+  children: ReactNode;
   active?: boolean;
-  disabled?: boolean;
 };
 
-const IconButton = ({
-  palette,
-  label,
-  children,
-  onClick,
-  active,
-  disabled,
-}: IconButtonProps) => (
+const IconButton = ({ palette, label, onClick, children, active }: IconButtonProps) => (
   <button
     type="button"
     aria-label={label}
-    disabled={disabled}
     onClick={onClick}
-    className={`rounded-full p-1 transition ${
-      disabled ? "cursor-not-allowed opacity-40" : "opacity-60 hover:opacity-100"
-    }`}
+    className="flex h-6 w-6 items-center justify-center transition hover:opacity-100"
     style={{
       color: active ? palette.iconActive : palette.iconMuted,
+      opacity: active ? 1 : 0.5,
     }}
   >
     {children}
@@ -890,12 +910,21 @@ const IconButton = ({
 );
 
 const ThinkingDots = ({ color }: { color: string }) => (
-  <div className="flex items-center gap-1" style={{ color }}>
+  <div className="flex items-center gap-2">
     {[0, 1, 2].map((index) => (
-      <span
+      <motion.span
         key={`dot-${index}`}
-        className="thinking-dot"
-        style={{ animationDelay: `${index * 0.15}s`, backgroundColor: color }}
+        className="h-2 w-2 rounded-full"
+        style={{ backgroundColor: color }}
+        animate={{
+          scale: [0.8, 1, 0.8],
+          opacity: [0.5, 1, 0.5],
+        }}
+        transition={{
+          duration: 0.9,
+          repeat: Infinity,
+          delay: index * 0.3,
+        }}
       />
     ))}
   </div>
