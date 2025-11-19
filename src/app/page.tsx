@@ -165,7 +165,7 @@ const persistChats = (chats: Chat[]) => {
   window.localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(chats));
 };
 
-const thinkingDelay = () => 2000 + Math.random() * 1000;
+const thinkingDelay = () => 1800 + Math.random() * 1000;
 
 const splitTokens = (content: string) =>
   content.trim().split(/\s+/).filter(Boolean);
@@ -688,11 +688,12 @@ export default function Home() {
             <button
               type="submit"
               aria-label="Send message"
-              disabled={!input.trim()}
-              className="mb-2 flex h-9 w-9 items-center justify-center rounded-full transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              className="mb-2 flex h-9 w-9 items-center justify-center rounded-full transition hover:brightness-110"
               style={{
                 backgroundColor: palette.inputFocus,
                 color: palette.textPrimary,
+                opacity: input.trim() ? 1 : 0,
+                pointerEvents: input.trim() ? "auto" : "none",
               }}
             >
               <ArrowUp size={16} strokeWidth={1.5} />
@@ -767,15 +768,21 @@ const Sidebar = ({
     >
       <div className="flex h-full flex-col px-4 py-4">
         {!collapsed && (
-          <p className="mb-4 text-sm font-semibold tracking-wide">Chats</p>
+          <p className="mb-4 text-sm font-semibold tracking-wide text-[#ececf1]">
+            Chats
+          </p>
         )}
         <button
           type="button"
           onClick={onNewChat}
-          className={`mb-4 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition hover:bg-[#343541] ${
-            collapsed ? "rounded-full" : ""
+          className={`mb-4 flex items-center justify-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition hover:bg-[#40414f] ${
+            collapsed ? "px-0" : ""
           }`}
-          style={{ backgroundColor: "#2f2f35", color: palette.textPrimary }}
+          style={{
+            backgroundColor: "#343541",
+            borderColor: "#565869",
+            color: "#ececf1",
+          }}
         >
           <Plus size={16} strokeWidth={1.6} />
           {!collapsed && <span>New chat</span>}
@@ -816,12 +823,10 @@ const Sidebar = ({
                   <button
                     type="button"
                     onClick={() => onSelectChat(chat.id)}
-                    className="relative flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:brightness-110"
+                    className="relative flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition hover:bg-[#343541]"
                     style={{
-                      color: palette.textPrimary,
-                      backgroundColor: isActive
-                        ? palette.sidebarHover
-                        : "transparent",
+                      color: "#ececf1",
+                      backgroundColor: isActive ? "#343541" : "transparent",
                     }}
                   >
                     {collapsed ? (
